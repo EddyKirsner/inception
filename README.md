@@ -1,134 +1,87 @@
-*This project has been created as part of the 42 curriculum by ekirsner.*
-
 # Inception
 
-## Description
+> A small production-like web stack (**Nginx + WordPress/PHP-FPM + MariaDB**) built from scratch with **Docker** and **Docker Compose**, served over **TLS 1.2/1.3**, with credentials handled through **Docker secrets**.
 
-Inception is a project that consists of setting up a small web infrastructure using Docker.  
-The goal is to learn how to containerize services and make them work together using Docker Compose.
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Compose-2496ED?logo=docker&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-009639?logo=nginx&logoColor=white)
+![MariaDB](https://img.shields.io/badge/MariaDB-003545?logo=mariadb&logoColor=white)
+![WordPress](https://img.shields.io/badge/WordPress-21759B?logo=wordpress&logoColor=white)
+![Debian](https://img.shields.io/badge/Debian-A81D33?logo=debian&logoColor=white)
 
-The infrastructure is composed of three services:
+## Architecture
 
-- **Nginx**: acts as a reverse proxy and handles HTTPS connections.
-- **WordPress**: the web application that serves the website.
-- **MariaDB**: the database used by WordPress to store data such as users, posts, and settings.
+```
+                 HTTPS :443 (TLS 1.2 / 1.3)
+  client ───────────────────────────────▶ ┌───────────┐
+                                          │   nginx   │  reverse proxy, TLS termination
+                                          └─────┬─────┘
+                                                │ FastCGI :9000
+                                          ┌─────▼─────┐
+                                          │ wordpress │  PHP 8.2-FPM + WP-CLI
+                                          └─────┬─────┘
+                                                │ MySQL :3306
+                                          ┌─────▼─────┐
+                                          │  mariadb  │
+                                          └───────────┘
+        private bridge network "inception"   ·   only port 443 is exposed
+        volumes: wordpress_data, mariadb_data (persisted on the host)
+```
 
-Each service runs inside its own container, and Docker Compose orchestrates the communication between them.
+## What this project demonstrates
 
-The project also uses Docker volumes to persist data and Docker secrets to securely manage credentials.
+- **Hand-written Dockerfiles** on `debian:bookworm-slim` (no ready-made images), with apt cache cleanup to keep images small.
+- **Service orchestration** with Docker Compose: dependencies, restart policies, an isolated bridge network, and a single exposed port.
+- **TLS termination** in Nginx (self-signed certificate, TLSv1.2/1.3 only) and FastCGI proxying to PHP-FPM.
+- **Secrets management**: passwords are mounted as Docker secrets in `/run/secrets/`, never baked into images or committed to git; non-sensitive config lives in `.env`.
+- **Idempotent entrypoints**: MariaDB and WordPress are initialised on first start only (database, users, WP install via WP-CLI), then simply restarted.
+- **Data persistence** with named volumes bound to the host, and Makefile targets to build, inspect, reset and clean the stack.
 
----
+## Project structure
 
-## Instructions
+```
+.
+├── Makefile                 # build / up / down / logs / reset targets
+├── secrets/                 # one password per file (git-ignored, not committed)
+└── srcs/
+    ├── .env                 # non-sensitive configuration (domain, DB name, users)
+    ├── docker-compose.yml
+    └── requirements/
+        ├── nginx/           # Dockerfile + nginx.conf
+        ├── wordpress/       # Dockerfile + php-fpm pool + entrypoint (WP-CLI)
+        └── mariadb/         # Dockerfile + server config + entrypoint
+```
 
-### Prerequisites
+## Getting started
 
-The project must be run on a Linux system or a virtual machine with a Linux kernel.
+**Requirements:** Linux, Docker, Docker Compose, GNU Make.
 
-You must have installed:
+1. Put one password per file (no trailing newline) in `secrets/`:
+   `db_root_password.txt`, `db_password.txt`, `wp_admin_password.txt`, `wp_user_password.txt`.
+2. Adjust `srcs/.env` (domain, users) and the volume paths in `srcs/docker-compose.yml` / `Makefile`.
+3. Point the domain to your machine, e.g. add `127.0.0.1 <login>.42.fr` to `/etc/hosts`.
+4. Run:
 
-- Docker
-- Docker Compose
-- GNU Make
+```bash
+make            # build images and start the stack
+make ps         # container status
+make logs       # follow logs
+make down       # stop
+make reset_all  # wipe persisted data
+```
 
----
+Then open `https://<login>.42.fr` (admin panel at `/wp-admin`).
 
-### Setup
+## Design choices
 
-1. Create the following directories: 
+| Choice | Why |
+|---|---|
+| Containers vs VMs | Containers share the host kernel: faster to start, lighter, reproducible. |
+| Secrets vs env vars | Env vars leak easily (`docker inspect`, logs); secrets are files readable only by the services that need them. |
+| Bridge network vs host network | Services talk by DNS name on an isolated network; only Nginx is reachable from outside. |
+| Volumes | Database and site files survive container rebuilds. |
 
-2. In `srcs/docker-compose.yml`, replace `<login>` in the volume paths with your own username.
-
-3. Set passwords in the files located in the `secrets/` directory.  
-Each file must contain only one password and no newline.
-
-4. Configure the `.env` file with your desired values.
-
----
-
-### Running the project
-
- home/login/data
-
-"sudo make" 
-
-This command builds the Docker images and starts the containers.
-
----
-
-### Stopping the project
-
-To stop the containers:
-
-sudo make down
-
-
----
-
-### Resetting the project
-
-If you want to reset the database or encounter an issue, run:
-
-sudo make reset_all
-
-
----
-
-### Accessing the website
-
-Once the containers are running, open your browser and go to:
-
-https://(your WP_URL(in .env))
-
-To access the WordPress administration panel:
-
-https://(your WP_URL(in .env))/wp-admin
-
-To access the WordPress as a wp user administration panel:
-
-https://<WP_URL>/wp-login.php
+More details in [DEV_DOC.md](DEV_DOC.md) and [USER_DOC.md](USER_DOC.md).
 
 ---
-
-## Technical Choices
-
-### Virtual Machines vs Docker
-
-Virtual machines emulate a full operating system including its own kernel.  
-Docker containers share the host system kernel, making them much lighter and faster to start.  
-Docker simplifies application deployment and makes environments easier to reproduce.
-
----
-
-### Secrets vs Environment Variables
-
-Environment variables store configuration values but may expose sensitive information.  
-Docker secrets allow sensitive data such as passwords to be stored securely and accessed only by the required containers.
-
----
-
-### Docker Network vs Host Network
-
-Docker networks isolate containers while allowing them to communicate through internal DNS names.  
-Host networking removes this isolation and exposes containers directly to the host network.  
-Using Docker networks improves security and container separation.
-
----
-
-### Docker Volumes vs Bind Mounts
-
-Docker volumes are managed by Docker and used to persist container data.  
-Bind mounts directly link a directory from the host machine to the container.  
-In this project, named volumes are configured with bind mounts to store persistent data inside `/home/<login>/data`.
-
----
-
-## Resources
-
-- Docker documentation: https://docs.docker.com/
-- Docker Compose documentation: https://docs.docker.com/compose/
-- Nginx documentation: https://nginx.org/en/docs/
-- WordPress documentation: https://wordpress.org/support/
-- MariaDB documentation: https://mariadb.org/documentation/
-
-AI tools were used to clarify Docker concepts, improve documentation structure, and assist in writing explanations for this project.
+*Project from the [42](https://42.fr) curriculum (42 Paris) by Eddy Kirsner.*
